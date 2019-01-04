@@ -1,8 +1,6 @@
 #include "yaes.h"
 
-#include <stdio.h>
 #include <memory.h>
-
 
 // Row shift lookup tables
 static const uint8_t shift_rows_table[] = {0, 5, 10, 15, 4, 9, 14, 3, 8, 13, 2, 7, 12, 1, 6, 11};
@@ -33,6 +31,7 @@ static const uint8_t sbox[] = {
         0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68, 0x41, 0x99, 0x2d, 0x0f, 0xb0, 0x54, 0xbb, 0x16
 };
 
+// inverse sbox lookup table
 static const uint8_t sbox_inv[] = {
         0x52, 0x09, 0x6a, 0xd5, 0x30, 0x36, 0xa5, 0x38, 0xbf, 0x40, 0xa3, 0x9e, 0x81, 0xf3, 0xd7, 0xfb,
         0x7c, 0xe3, 0x39, 0x82, 0x9b, 0x2f, 0xff, 0x87, 0x34, 0x8e, 0x43, 0x44, 0xc4, 0xde, 0xe9, 0xcb,
@@ -167,112 +166,161 @@ static const uint8_t g14[] = {
         0xd7, 0xd9, 0xcb, 0xc5, 0xef, 0xe1, 0xf3, 0xfd, 0xa7, 0xa9, 0xbb, 0xb5, 0x9f, 0x91, 0x83, 0x8d
 };
 
-static void sub_bytes(uint8_t *a, int n) {
+static void xor_key(uint8_t *state, const uint8_t *key, ssize_t n) {
     for (int i = 0; i < n; i++)
-        a[i] = sbox[a[i]];
+        state[i] ^= key[i];
 }
 
-static void sub_bytes_inv(uint8_t *a, int n) {
-    for (int i = 0; i < n; i++)
-        a[i] = sbox_inv[a[i]];
+static void rotate(uint8_t *in) {
+    uint8_t t = in[0];
+    for (int i = 0; i < 3; i++)
+        in[i] = in[i + 1];
+    in[3] = t;
 }
 
-static void key_schedule(uint8_t *a, int i) {
-    uint8_t t = a[0];
-    a[0] = a[1];
-    a[1] = a[2];
-    a[2] = a[3];
-    a[3] = t;
-    sub_bytes(a, 4);
-    a[0] ^= rcon[i];
+// Shifts rows and preforms sbox and rcon lookups
+static void key_schedule_core(uint8_t *in, int i) {
+    rotate(in);
+    sub_bytes(in, 4);
+    in[0] ^= rcon[i];
 }
 
-static void xor(uint8_t *a, const uint8_t *b, ssize_t n) {
-    for (int i = 0; i < n; i++)
-        a[i] ^= b[i];
-}
-
-void expand_key(const uint8_t *key, uint8_t *expanded_key) {
+// Expands our ordinal key into multiple round keys
+void expand_key(const uint8_t *key, uint8_t *round_keys) {
     ssize_t bytes = 16;
     int i = 1;
-    uint8_t temp[4];
+    uint8_t t[4];
 
     // Setup the first 16 bytes of our expanded key using the encryption key
-    memcpy(expanded_key, key, 16);
+    memcpy(round_keys, key, 16);
 
     // Fill the remaining bytes until we have a total of 176 bytes
     while (bytes < 176) {
         // Start by setting up the first 4 bytes
         // Set temp to the last for bytes of the expanded key
-        memcpy(temp, expanded_key + bytes - 4, 4);
-        key_schedule(temp, i++);
+        memcpy(t, round_keys + bytes - 4, 4);
+        key_schedule_core(t, i++);
         // XOR temp with the 4 bytes of the last full key size
-        xor(temp, expanded_key + bytes - 16, 4);
+        xor_key(t, round_keys + bytes - 16, 4);
         // Put temp at the end
-        memcpy(expanded_key + bytes, temp, 4);
+        memcpy(round_keys + bytes, t, 4);
         bytes += 4;
 
         // Setup the next 12 bytes
         for (int j = 0; j < 3; j++) {
-            memcpy(temp, expanded_key + bytes - 4, 4);
-            xor(temp, expanded_key + bytes - 16, 4);
-            memcpy(expanded_key + bytes, temp, 4);
+            memcpy(t, round_keys + bytes - 4, 4);
+            xor_key(t, round_keys + bytes - 16, 4);
+            memcpy(round_keys + bytes, t, 4);
             bytes += 4;
         }
     }
 }
 
+// Substitute bytes using the sbox lookup table
+static void sub_bytes(uint8_t *in, int n) {
+    for (int i = 0; i < n; i++)
+        in[i] = sbox[in[i]];
+}
+
+static void sub_bytes_inv(uint8_t *in, int n) {
+    for (int i = 0; i < n; i++)
+        in[i] = sbox_inv[in[i]];
+}
+
 // Shifts each row to the left starting at 0 and incrementing by 1 for each subsequent row
-void shift_rows(uint8_t *state) {
-    uint8_t temp[16];
-    memcpy(temp, state, 16);
+void shift_rows(uint8_t *in) {
+    uint8_t t[16];
+    memcpy(t, in, 16);
     for (int i = 0; i < 16; i++) {
-        state[i] = temp[shift_rows_table[i]];
+        in[i] = t[shift_rows_table[i]];
+    }
+}
+
+void shift_rows_inv(uint8_t *in) {
+    uint8_t t[16];
+    memcpy(t, in, 16);
+    for (int i = 0; i < 16; i++) {
+        in[i] = t[shift_rows_table_inv[i]];
     }
 }
 
 // Each column is multiplied with a fixed polynomial (in this case in the lookup table) then shifted
 // See https://en.wikipedia.org/wiki/Rijndael_MixColumns
-void mix_cols(uint8_t *state) {
+void mix_cols(uint8_t *in) {
     for (int i = 0; i < 16; i += 4) {
-        uint8_t a0 = state[i + 0];
-        uint8_t a1 = state[i + 1];
-        uint8_t a2 = state[i + 2];
-        uint8_t a3 = state[i + 3];
-        state[i + 0] = g2[a0] ^ g3[a1] ^ a2 ^ a3;
-        state[i + 1] = g2[a1] ^ g3[a2] ^ a3 ^ a0;
-        state[i + 2] = g2[a2] ^ g3[a3] ^ a0 ^ a1;
-        state[i + 3] = g2[a3] ^ g3[a0] ^ a1 ^ a2;
+        uint8_t a0 = in[i + 0];
+        uint8_t a1 = in[i + 1];
+        uint8_t a2 = in[i + 2];
+        uint8_t a3 = in[i + 3];
+        in[i + 0] = g2[a0] ^ g3[a1] ^ a2 ^ a3;
+        in[i + 1] = g2[a1] ^ g3[a2] ^ a3 ^ a0;
+        in[i + 2] = g2[a2] ^ g3[a3] ^ a0 ^ a1;
+        in[i + 3] = g2[a3] ^ g3[a0] ^ a1 ^ a2;
     }
 }
 
-void encrypt_aes(const uint8_t *ptx, const uint8_t *key, uint8_t *ctx) {
+void mix_cols_inv(uint8_t *in) {
+    uint8_t a0 = in[0];
+    uint8_t a1 = in[1];
+    uint8_t a2 = in[2];
+    uint8_t a3 = in[3];
+    in[0] = g14[a0] ^ g9[a3] ^ g13[a2] ^ g11[a1];
+    in[1] = g14[a1] ^ g9[a0] ^ g13[a3] ^ g11[a2];
+    in[2] = g14[a2] ^ g9[a1] ^ g13[a0] ^ g11[a3];
+    in[3] = g14[a3] ^ g9[a2] ^ g13[a1] ^ g11[a0];
+}
+
+static void add_round_key(uint8_t *state, const uint8_t *round_keys, int round) {
+    xor_key(state, round_keys + round * 16, 16);
+}
+
+void encrypt_aes(const uint8_t *p, const uint8_t *key, uint8_t *c) {
     // Key expansion
-    uint8_t expanded_key[176];
-    expand_key(key, expanded_key);
+    uint8_t round_keys[176];
+    expand_key(key, round_keys);
 
     // First Round
-    memcpy(ctx, ptx, 16);
-    // XOR with the round key (pulled from expanded_key)
-    xor(ctx, ptx, 16);
+    memcpy(c, p, 16);
+    // XOR with the round key (pulled from round_keys)
+    add_round_key(c, round_keys, 0);
+
 
     // Middle rounds
-    for (int i = 0; i < 9; i++) {
+    for (int i = 1; i < 10; i++) {
         // Substitute bytes using S-box lookup table
-        sub_bytes(ctx, 16);
+        sub_bytes(c, 16);
         // Shift's each state row after the first
-        shift_rows(ctx);
+        shift_rows(c);
         // Preform table lookup and shift for each column
-        mix_cols(ctx);
-        // XOR with the round key (pulled from expanded_key)
-        xor(ctx, expanded_key + (i + 1) * 16, 16);
+        mix_cols(c);
+        // XOR with the round key (pulled from round_keys)
+        add_round_key(c, round_keys, i);
     }
 
     // Final Round
     // Substitute bytes using S-box lookup table
-    sub_bytes(ctx, 16);
+    sub_bytes(c, 16);
     // Shift's each state row after the first
-    shift_rows(ctx);
-    // XOR with the round key (pulled from expanded_key)
-    xor(ctx, expanded_key + 10 * 16, 16);
+    shift_rows(c);
+    // XOR with the round key (pulled from round_keys)
+    add_round_key(c, round_keys, 10);
+}
+
+void decrypt_aes(const uint8_t *c, const uint8_t *k, uint8_t *m) {
+    uint8_t expanded_keys[176];
+    expand_key(k, expanded_keys);
+
+    memcpy(m, c, 16);
+    add_round_key(m, expanded_keys, 10);
+    shift_rows_inv(m);
+    sub_bytes_inv(m, 16);
+
+    for (int i = 9; i > 0; i--) {
+        add_round_key(m, expanded_keys, i);
+        mix_cols_inv(m);
+        shift_rows_inv(m);
+        sub_bytes_inv(m, 16);
+    }
+
+    add_round_key(m, expanded_keys, 0);
 }
