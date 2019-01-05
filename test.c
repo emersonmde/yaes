@@ -3,7 +3,14 @@
 #include <memory.h>
 #include "yaes.h"
 
-int test_expand_key() {
+void print_hex(unsigned char *a, size_t len) {
+    for (int i = 0; i < len; i++) {
+        printf(" %02x", a[i]);
+    }
+    printf("\n");
+}
+
+int test_aes_expand_key() {
     uint8_t key[] = {0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c};
     uint8_t expected_key[] = {0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f,
                               0x3c, 0xa0, 0xfa, 0xfe, 0x17, 0x88, 0x54, 0x2c, 0xb1, 0x23, 0xa3, 0x39, 0x39, 0x2a, 0x6c,
@@ -20,95 +27,146 @@ int test_expand_key() {
     uint8_t expanded_key[176];
 
     printf("\nTest AES128 key expansion\n");
-    expand_key(key, expanded_key);
+    aes_expand_key(expanded_key, key);
     if (memcmp(expanded_key, expected_key, 176) == 0) {
         printf("Expanded key matches expected value\n");
         return 0;
     } else {
         printf("Expanded key does not match expected value\n");
         printf("%s", "Expected expanded key: ");
-        for (int i = 0; i < 176; i++) {
-            printf("%02x", expected_key[i]);
-        }
-        printf("\n");
+        print_hex(expected_key, sizeof(expected_key));
 
         printf("%s", "Actual expanded key: ");
-        for (int i = 0; i < 176; i++) {
-            printf("%02x", expanded_key[i]);
-        }
-        printf("\n");
+        print_hex(expanded_key, sizeof(expanded_key));
         return 1;
     }
 }
 
-int test_encrypt_aes() {
-    uint8_t plaintext[] = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee,
-                           0xff};
+int test_aes_encrypt() {
+    uint8_t buf[] = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee,
+                     0xff};
     uint8_t key[] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f};
     uint8_t expected_ciphertext[] = {0x69, 0xc4, 0xe0, 0xd8, 0x6a, 0x7b, 0x04, 0x30, 0xd8, 0xcd, 0xb7, 0x80, 0x70, 0xb4,
                                      0xc5, 0x5a};
-    uint8_t ciphertext[16];
+    AES_KEY aes_key;
 
     printf("\nTest AES128 encryption\n");
-    encrypt_aes(plaintext, key, ciphertext);
-    if (memcmp(ciphertext, expected_ciphertext, 16) == 0) {
+    aes_set_key(key, 16, &aes_key);
+    aes_encrypt(buf, &aes_key);
+    if (memcmp(buf, expected_ciphertext, 16) == 0) {
         printf("Ciphertext matches expected value\n");
         return 0;
     } else {
         printf("Ciphertext does not match expected value\n");
         printf("%s", "Expected ciphertext: ");
-        for (int i = 0; i < 16; i++) {
-            printf("%02x", expected_ciphertext[i]);
-        }
-        printf("\n");
+        print_hex(expected_ciphertext, sizeof(expected_ciphertext));
 
         printf("%s", "Actual ciphertext: ");
-        for (int i = 0; i < 16; i++) {
-            printf("%02x", ciphertext[i]);
-        }
-        printf("\n");
+        print_hex(buf, sizeof(buf));
         return 1;
     }
 }
 
-int test_decrypt_aes() {
+int test_aes_decrypt() {
     uint8_t key[] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f};
-    uint8_t ciphertext[] = {0x69, 0xc4, 0xe0, 0xd8, 0x6a, 0x7b, 0x04, 0x30, 0xd8, 0xcd, 0xb7, 0x80, 0x70, 0xb4,
-                                     0xc5, 0x5a};
-    uint8_t expected_plaintext[] = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee,
-                           0xff};
-    uint8_t plaintext[16];
+    uint8_t buf[] = {0x69, 0xc4, 0xe0, 0xd8, 0x6a, 0x7b, 0x04, 0x30, 0xd8, 0xcd, 0xb7, 0x80, 0x70, 0xb4,
+                     0xc5, 0x5a};
+    uint8_t expected_plaintext[] = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
+                                    0xee,
+                                    0xff};
+    AES_KEY aes_key;
 
     printf("\nTest AES128 decryption\n");
-    decrypt_aes(ciphertext, key, plaintext);
-    if (memcmp(plaintext, expected_plaintext, 16) == 0) {
+    aes_set_key(key, 16, &aes_key);
+    aes_decrypt(buf, &aes_key);
+    if (memcmp(buf, expected_plaintext, 16) == 0) {
         printf("Plaintext matches expected value\n");
         return 0;
     } else {
         printf("Plaintext does not match expected value\n");
 
         printf("%s", "Expected plaintext: ");
-        for (int i = 0; i < 16; i++) {
-            printf("%02x", expected_plaintext[i]);
-        }
-        printf("\n");
+        print_hex(expected_plaintext, sizeof(expected_plaintext));
 
         printf("%s", "Plaintext: ");
-        for (int i = 0; i < 16; i++) {
-            printf("%02x", plaintext[i]);
-        }
-        printf("\n");
+        print_hex(buf, sizeof(buf));
 
         return 1;
     }
 
 }
 
+int test_aes_cbc_encrypt() {
+    AES_KEY aes_key;
+    unsigned char buf[] = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee,
+                           0xff};
+    uint8_t key[] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f};
+    uint8_t iv[] = {0x30, 0x9a, 0xdf, 0x66, 0xe7, 0xcd, 0x4b, 0x6c, 0xc2, 0xd4, 0x0c, 0xe4, 0xca, 0x5c, 0x3a, 0x42};
+    unsigned char expected_ciphertext[] = {0xbe, 0xcd, 0x41, 0xa3, 0x6b, 0x0e, 0x24, 0xa1, 0xed, 0xb1, 0x03, 0x04, 0xce,
+                                           0xd1, 0xe9, 0x89, 0x02, 0x03, 0x07, 0x7e, 0x5d, 0x1d, 0x93, 0x85, 0xe9, 0x2e,
+                                           0xf4, 0x09, 0x12, 0xd5, 0xfc, 0xc2, 0xd0, 0x02, 0x54, 0x33, 0x2d, 0xb5, 0x52,
+                                           0x44, 0x76, 0x7c, 0x4f, 0x38, 0xd1, 0xed, 0x7b, 0x2d};
+    unsigned char padded_buf[pkcs7_padded_length(sizeof(buf))];
+    unsigned char ciphertext[pkcs7_padded_length(sizeof(buf))];
+
+    printf("\nTest AES128 CBC encryption\n");
+    aes_set_key(key, 16, &aes_key);
+    pkcs7_pad(buf, sizeof(buf), padded_buf, sizeof(padded_buf));
+    aes_cbc_encrypt(padded_buf, ciphertext, sizeof(ciphertext), &aes_key, iv);
+    if (memcmp(ciphertext, expected_ciphertext, 16) == 0) {
+        printf("Ciphertext matches expected value\n");
+        return 0;
+    } else {
+        printf("Ciphertext does not match expected value\n");
+        printf("%s", "Expected ciphertext: ");
+        print_hex(expected_ciphertext, sizeof(expected_ciphertext));
+
+        printf("%s", "Actual ciphertext: ");
+        print_hex(ciphertext, sizeof(ciphertext));
+        return 1;
+    }
+}
+
+int test_aes_cbc_decrypt() {
+    AES_KEY aes_key;
+    unsigned char buf[] = {0xbe, 0xcd, 0x41, 0xa3, 0x6b, 0x0e, 0x24, 0xa1, 0xed, 0xb1, 0x03, 0x04, 0xce,
+                           0xd1, 0xe9, 0x89, 0x02, 0x03, 0x07, 0x7e, 0x5d, 0x1d, 0x93, 0x85, 0xe9, 0x2e,
+                           0xf4, 0x09, 0x12, 0xd5, 0xfc, 0xc2, 0xd0, 0x02, 0x54, 0x33, 0x2d, 0xb5, 0x52,
+                           0x44, 0x76, 0x7c, 0x4f, 0x38, 0xd1, 0xed, 0x7b, 0x2d};
+    uint8_t key[] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f};
+    uint8_t iv[] = {0x30, 0x9a, 0xdf, 0x66, 0xe7, 0xcd, 0x4b, 0x6c, 0xc2, 0xd4, 0x0c, 0xe4, 0xca, 0x5c, 0x3a, 0x42};
+    unsigned char expected_plaintext[] = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb,
+                                            0xcc, 0xdd, 0xee, 0xff, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+                                            0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20};
+    unsigned char expected_stripped_plaintext[] = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa,
+                                                   0xbb, 0xcc, 0xdd, 0xee,
+                                                   0xff};
+    unsigned char plaintext[32];
+
+    printf("\nTest AES128 CBC decryption\n");
+    aes_set_key(key, 16, &aes_key);
+    aes_cbc_decrypt(buf, plaintext, sizeof(plaintext), &aes_key, iv);
+    if (memcmp(plaintext, expected_plaintext, sizeof(expected_plaintext)) == 0) {
+        printf("Ciphertext matches expected value\n");
+        return 0;
+    } else {
+        printf("Ciphertext does not match expected value\n");
+        printf("%s", "Expected plaintext: ");
+        print_hex(expected_plaintext, sizeof(expected_plaintext));
+
+        printf("%s", "Actual plaintext: ");
+        print_hex(plaintext, sizeof(plaintext));
+        return 1;
+    }
+}
+
 int main() {
     int t = 0;
-    t |= test_expand_key();
-    t |= test_encrypt_aes();
-    t |= test_decrypt_aes();
+    t |= test_aes_expand_key();
+    t |= test_aes_encrypt();
+    t |= test_aes_decrypt();
+    t |= test_aes_cbc_encrypt();
+    t |= test_aes_cbc_decrypt();
     return t;
 }
 

@@ -4,22 +4,33 @@
 #include <stdint.h>
 #include <stdio.h>
 
-static void xor_key(uint8_t *state, const uint8_t *key, ssize_t n);
-static void rotate(uint8_t *in);
+#define AES_BLOCK_SIZE 16
 
-static void key_schedule_core(uint8_t *in, int i);
-void expand_key(const uint8_t *key, uint8_t *expanded_key);
+typedef struct {
+    size_t keylen;
+    uint8_t round_keys[176];
+    uint8_t iv[AES_BLOCK_SIZE];
+} AES_KEY;
 
-static void sub_bytes(uint8_t *in, int n);
-static void sub_bytes_inv(uint8_t *in, int n);
-void shift_rows(uint8_t *in);
-void shift_rows_inv(uint8_t *in);
-void mix_cols(uint8_t *in);
-void mix_cols_inv(uint8_t *in);
-static void add_round_key(uint8_t *state, const uint8_t *round_keys, int round);
+void aes_expand_key(uint8_t *expanded_key, const uint8_t *key);
 
+void aes_set_key(const uint8_t *keybuf, size_t len, AES_KEY *key);
 
-void encrypt_aes(const uint8_t *p, const uint8_t *key, uint8_t *c);
-void decrypt_aes(const uint8_t *c, const uint8_t *k, uint8_t *m);
+void aes_gen_iv(uint8_t *iv);
+
+void aes_encrypt(uint8_t *buf, const AES_KEY *key);
+
+void aes_decrypt(uint8_t *buf, const AES_KEY *key);
+
+size_t pkcs7_padded_length(const size_t len);
+
+void pkcs7_pad(const unsigned char *in, size_t input_len, unsigned char *out, size_t output_len);
+
+void
+aes_cbc_encrypt(const unsigned char *in, unsigned char *out, const size_t len, const AES_KEY *key, const uint8_t *iv);
+
+void
+aes_cbc_decrypt(const unsigned char *in, unsigned char *out, const size_t len, const AES_KEY *key, const uint8_t *iv);
+
 
 #endif

@@ -1,6 +1,10 @@
 #include "yaes.h"
 
 #include <memory.h>
+#include <time.h>
+#include <stdlib.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 // Row shift lookup tables
 static const uint8_t shift_rows_table[] = {0, 5, 10, 15, 4, 9, 14, 3, 8, 13, 2, 7, 12, 1, 6, 11};
@@ -166,9 +170,9 @@ static const uint8_t g14[] = {
         0xd7, 0xd9, 0xcb, 0xc5, 0xef, 0xe1, 0xf3, 0xfd, 0xa7, 0xa9, 0xbb, 0xb5, 0x9f, 0x91, 0x83, 0x8d
 };
 
-static void xor_key(uint8_t *state, const uint8_t *key, ssize_t n) {
+static void memxor(uint8_t *a, const uint8_t *b, ssize_t n) {
     for (int i = 0; i < n; i++)
-        state[i] ^= key[i];
+        a[i] ^= b[i];
 }
 
 static void rotate(uint8_t *in) {
@@ -178,42 +182,8 @@ static void rotate(uint8_t *in) {
     in[3] = t;
 }
 
-// Shifts rows and preforms sbox and rcon lookups
-static void key_schedule_core(uint8_t *in, int i) {
-    rotate(in);
-    sub_bytes(in, 4);
-    in[0] ^= rcon[i];
-}
-
-// Expands our ordinal key into multiple round keys
-void expand_key(const uint8_t *key, uint8_t *round_keys) {
-    ssize_t bytes = 16;
-    int i = 1;
-    uint8_t t[4];
-
-    // Setup the first 16 bytes of our expanded key using the encryption key
-    memcpy(round_keys, key, 16);
-
-    // Fill the remaining bytes until we have a total of 176 bytes
-    while (bytes < 176) {
-        // Start by setting up the first 4 bytes
-        // Set temp to the last for bytes of the expanded key
-        memcpy(t, round_keys + bytes - 4, 4);
-        key_schedule_core(t, i++);
-        // XOR temp with the 4 bytes of the last full key size
-        xor_key(t, round_keys + bytes - 16, 4);
-        // Put temp at the end
-        memcpy(round_keys + bytes, t, 4);
-        bytes += 4;
-
-        // Setup the next 12 bytes
-        for (int j = 0; j < 3; j++) {
-            memcpy(t, round_keys + bytes - 4, 4);
-            xor_key(t, round_keys + bytes - 16, 4);
-            memcpy(round_keys + bytes, t, 4);
-            bytes += 4;
-        }
-    }
+static void add_round_key(uint8_t *state, const uint8_t *round_keys, int round) {
+    memxor(state, round_keys + round * AES_BLOCK_SIZE, AES_BLOCK_SIZE);
 }
 
 // Substitute bytes using the sbox lookup table
@@ -229,25 +199,25 @@ static void sub_bytes_inv(uint8_t *in, int n) {
 
 // Shifts each row to the left starting at 0 and incrementing by 1 for each subsequent row
 void shift_rows(uint8_t *in) {
-    uint8_t t[16];
-    memcpy(t, in, 16);
-    for (int i = 0; i < 16; i++) {
+    uint8_t t[AES_BLOCK_SIZE];
+    memcpy(t, in, AES_BLOCK_SIZE);
+    for (int i = 0; i < AES_BLOCK_SIZE; i++) {
         in[i] = t[shift_rows_table[i]];
     }
 }
 
 void shift_rows_inv(uint8_t *in) {
-    uint8_t t[16];
-    memcpy(t, in, 16);
-    for (int i = 0; i < 16; i++) {
+    uint8_t t[AES_BLOCK_SIZE];
+    memcpy(t, in, AES_BLOCK_SIZE);
+    for (int i = 0; i < AES_BLOCK_SIZE; i++) {
         in[i] = t[shift_rows_table_inv[i]];
     }
 }
 
 // Each column is multiplied with a fixed polynomial (in this case in the lookup table) then shifted
 // See https://en.wikipedia.org/wiki/Rijndael_MixColumns
-void mix_cols(uint8_t *in) {
-    for (int i = 0; i < 16; i += 4) {
+void mix_columns(uint8_t *in) {
+    for (int i = 0; i < AES_BLOCK_SIZE; i += 4) {
         uint8_t a0 = in[i + 0];
         uint8_t a1 = in[i + 1];
         uint8_t a2 = in[i + 2];
@@ -259,9 +229,9 @@ void mix_cols(uint8_t *in) {
     }
 }
 
-void mix_cols_inv(uint8_t *in) {
-    for (int i = 0; i < 16; i += 4) {
-        uint8_t a0 = in[i+ 0];
+void mix_columns_inv(uint8_t *in) {
+    for (int i = 0; i < AES_BLOCK_SIZE; i += 4) {
+        uint8_t a0 = in[i + 0];
         uint8_t a1 = in[i + 1];
         uint8_t a2 = in[i + 2];
         uint8_t a3 = in[i + 3];
@@ -272,57 +242,147 @@ void mix_cols_inv(uint8_t *in) {
     }
 }
 
-static void add_round_key(uint8_t *state, const uint8_t *round_keys, int round) {
-    xor_key(state, round_keys + round * 16, 16);
+
+// Shifts rows and preforms sbox and rcon lookups
+static void key_schedule_core(uint8_t *in, int i) {
+    rotate(in);
+    sub_bytes(in, 4);
+    in[0] ^= rcon[i];
 }
 
-void encrypt_aes(const uint8_t *p, const uint8_t *key, uint8_t *c) {
-    // Key expansion
-    uint8_t round_keys[176];
-    expand_key(key, round_keys);
+// Expands our ordinal key into multiple round keys
+void aes_expand_key(uint8_t *round_keys, const uint8_t *key) {
+    ssize_t bytes = 16;
+    int i = 1;
+    uint8_t t[4];
 
+    // Setup the first 16 bytes of our expanded key using the encryption key
+    memcpy(round_keys, key, 16);
+
+    // Fill the remaining bytes until we have a total of 176 bytes
+    while (bytes < 176) {
+        // Start by setting up the first 4 bytes
+        // Set temp to the last for bytes of the expanded key
+        memcpy(t, round_keys + bytes - 4, 4);
+        key_schedule_core(t, i++);
+        // XOR temp with the 4 bytes of the last full key size
+        memxor(t, round_keys + bytes - 16, 4);
+        // Put temp at the end
+        memcpy(round_keys + bytes, t, 4);
+        bytes += 4;
+
+        // Setup the next 12 bytes
+        for (int j = 0; j < 3; j++) {
+            memcpy(t, round_keys + bytes - 4, 4);
+            memxor(t, round_keys + bytes - 16, 4);
+            memcpy(round_keys + bytes, t, 4);
+            bytes += 4;
+        }
+    }
+}
+
+// Initialize context
+void aes_set_key(const uint8_t *keybuf, size_t len, AES_KEY *key) {
+    aes_expand_key(key->round_keys, keybuf);
+}
+
+void aes_gen_iv(uint8_t *iv) {
+    int urandom = open("/dev/urandom", O_RDONLY);
+    if (urandom < 0) {
+        srand((unsigned int) time(NULL));
+        for (int i = 0; i < AES_BLOCK_SIZE; i++)
+            iv[i] = (uint8_t) rand();
+    } else {
+        uint8_t random_iv[AES_BLOCK_SIZE];
+        ssize_t result = read(urandom, random_iv, sizeof(random_iv));
+        if (result < sizeof(random_iv)) {
+            srand(time(NULL));
+            for (int i = 0; i < AES_BLOCK_SIZE; i++)
+                iv[i] = (uint8_t) rand();
+        } else {
+            memcpy(iv, random_iv, sizeof(random_iv));
+        }
+    }
+}
+
+void aes_encrypt(uint8_t *buf, const AES_KEY *key) {
     // First Round
-    memcpy(c, p, 16);
     // XOR with the round key (pulled from round_keys)
-    add_round_key(c, round_keys, 0);
-
+    add_round_key(buf, key->round_keys, 0);
 
     // Middle rounds
     for (int i = 1; i < 10; i++) {
         // Substitute bytes using S-box lookup table
-        sub_bytes(c, 16);
+        sub_bytes(buf, AES_BLOCK_SIZE);
         // Shift's each state row after the first
-        shift_rows(c);
+        shift_rows(buf);
         // Preform table lookup and shift for each column
-        mix_cols(c);
+        mix_columns(buf);
         // XOR with the round key (pulled from round_keys)
-        add_round_key(c, round_keys, i);
+        add_round_key(buf, key->round_keys, i);
     }
 
     // Final Round
     // Substitute bytes using S-box lookup table
-    sub_bytes(c, 16);
+    sub_bytes(buf, AES_BLOCK_SIZE);
     // Shift's each state row after the first
-    shift_rows(c);
+    shift_rows(buf);
     // XOR with the round key (pulled from round_keys)
-    add_round_key(c, round_keys, 10);
+    add_round_key(buf, key->round_keys, 10);
 }
 
-void decrypt_aes(const uint8_t *c, const uint8_t *k, uint8_t *m) {
-    uint8_t expanded_keys[176];
-    expand_key(k, expanded_keys);
+void aes_decrypt(uint8_t *buf, const AES_KEY *key) {
+    // First Round
+    add_round_key(buf, key->round_keys, 10);
+    shift_rows_inv(buf);
+    sub_bytes_inv(buf, AES_BLOCK_SIZE);
 
-    memcpy(m, c, 16);
-    add_round_key(m, expanded_keys, 10);
-    shift_rows_inv(m);
-    sub_bytes_inv(m, 16);
-
+    // Middle Rounds
     for (int i = 9; i > 0; i--) {
-        add_round_key(m, expanded_keys, i);
-        mix_cols_inv(m);
-        shift_rows_inv(m);
-        sub_bytes_inv(m, 16);
+        add_round_key(buf, key->round_keys, i);
+        mix_columns_inv(buf);
+        shift_rows_inv(buf);
+        sub_bytes_inv(buf, AES_BLOCK_SIZE);
     }
 
-    add_round_key(m, expanded_keys, 0);
+    // Final Round
+    add_round_key(buf, key->round_keys, 0);
+}
+
+size_t pkcs7_padded_length(const size_t len) {
+    return (((len + AES_BLOCK_SIZE) / AES_BLOCK_SIZE) * AES_BLOCK_SIZE) + AES_BLOCK_SIZE;
+}
+
+// Used to pad in to output_len (see pkcs7 padding)
+void pkcs7_pad(const unsigned char *in, size_t input_len, unsigned char *out, size_t output_len) {
+    if (output_len < input_len)
+        return;
+    size_t pad_len = output_len - input_len;
+    memcpy(out, in, input_len);
+    for (size_t i = input_len; i < output_len; i++)
+        out[i] = (unsigned char) pad_len;
+}
+
+// Uses cipher block chaining to encrypt `in` using aes_encrypt() - `in` must be padded to AES_BLOCK_SIZE
+void
+aes_cbc_encrypt(const unsigned char *in, unsigned char *out, const size_t len, const AES_KEY *key, const uint8_t *iv) {
+    uint8_t *p = (uint8_t *)iv;
+    memcpy(out, in, len);
+    for (int i = 0; i < len; i += AES_BLOCK_SIZE) {
+        memxor(out + i, p, AES_BLOCK_SIZE);
+        aes_encrypt(out + i, key);
+        p = out + i;
+    }
+}
+
+// Decrypts `in` using cipher block chaining - requires the correct IV for the initial block
+void
+aes_cbc_decrypt(const unsigned char *in, unsigned char *out, const size_t len, const AES_KEY *key, const uint8_t *iv) {
+    memcpy(out, in, len);
+    for (size_t i = len - AES_BLOCK_SIZE; i > 0; i -= AES_BLOCK_SIZE) {
+        aes_decrypt(out + i, key);
+        memxor(out + i, out + i - AES_BLOCK_SIZE, AES_BLOCK_SIZE);
+    }
+    aes_decrypt(out, key);
+    memxor(out, iv, AES_BLOCK_SIZE);
 }
