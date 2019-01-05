@@ -260,14 +260,16 @@ void mix_cols(uint8_t *in) {
 }
 
 void mix_cols_inv(uint8_t *in) {
-    uint8_t a0 = in[0];
-    uint8_t a1 = in[1];
-    uint8_t a2 = in[2];
-    uint8_t a3 = in[3];
-    in[0] = g14[a0] ^ g9[a3] ^ g13[a2] ^ g11[a1];
-    in[1] = g14[a1] ^ g9[a0] ^ g13[a3] ^ g11[a2];
-    in[2] = g14[a2] ^ g9[a1] ^ g13[a0] ^ g11[a3];
-    in[3] = g14[a3] ^ g9[a2] ^ g13[a1] ^ g11[a0];
+    for (int i = 0; i < 16; i += 4) {
+        uint8_t a0 = in[i+ 0];
+        uint8_t a1 = in[i + 1];
+        uint8_t a2 = in[i + 2];
+        uint8_t a3 = in[i + 3];
+        in[i + 0] = g14[a0] ^ g9[a3] ^ g13[a2] ^ g11[a1];
+        in[i + 1] = g14[a1] ^ g9[a0] ^ g13[a3] ^ g11[a2];
+        in[i + 2] = g14[a2] ^ g9[a1] ^ g13[a0] ^ g11[a3];
+        in[i + 3] = g14[a3] ^ g9[a2] ^ g13[a1] ^ g11[a0];
+    }
 }
 
 static void add_round_key(uint8_t *state, const uint8_t *round_keys, int round) {
