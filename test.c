@@ -37,7 +37,7 @@ int test_expand_key() {
             printf("%02x", expanded_key[i]);
         }
         printf("\n");
-        return -1;
+        return 1;
     }
 }
 
@@ -67,7 +67,7 @@ int test_encrypt_aes() {
             printf("%02x", ciphertext[i]);
         }
         printf("\n");
-        return -2;
+        return 1;
     }
 }
 
@@ -99,15 +99,17 @@ int test_decrypt_aes() {
         }
         printf("\n");
 
-        return -2;
+        return 1;
     }
 
 }
 
 int main() {
-    test_expand_key();
-    test_encrypt_aes();
-    test_decrypt_aes();
+    int t = 0;
+    t |= test_expand_key();
+    t |= test_encrypt_aes();
+    t |= test_decrypt_aes();
+    return t;
 }
 
 
